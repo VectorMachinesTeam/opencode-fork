@@ -175,6 +175,45 @@ git push origin dev
 git checkout vm-main
 ```
 
+### Quick recipe: find and merge the newest release tag
+
+When you just want to pull in the latest **release** (not the bleeding-edge `dev`
+tip), use this to find the right tag and merge it. Steps 3–4 matter: the
+*newest-looking* tag isn't always the latest release — there are stale/unrelated
+tag series (e.g. `github-v*`) that can sort near the top, so always confirm by
+version sort **and** commit date before merging.
+
+```bash
+# 1. Switch to vm-main and make sure it's clean/up to date
+git checkout vm-main
+git status
+git pull origin vm-main
+
+# 2. Get the latest tags from the real upstream project
+git fetch upstream --tags
+
+# 3. Find the newest real release tag (version-sorted, not alphabetical)
+git tag -l "v*" | sort -V | tail -5
+
+# 4. Sanity-check the date of the tag you think is newest (swap in the actual tag)
+git log -1 --format="%ci %s" v1.18.X
+
+# 5. Merge that release tag into vm-main
+git merge v1.18.X
+
+# --- if there are conflicts, fix the flagged files, then: ---
+git add <resolved-files>
+git commit
+```
+
+> This merges the tag **straight into `vm-main`**, which is the fast path — fine for
+> small, clean release syncs (same as "Option B — direct" above). If the merge is
+> large or conflict-heavy, do it on a throwaway `sync/upstream-YYYY-MM-DD` branch
+> first (steps 2–6 of the Sync loop above) so a messy merge never touches `vm-main`.
+
+Then build/test before trusting it (`bun install && bun run typecheck`), and push
+with `git push origin vm-main` once it's green.
+
 ---
 
 ## Quick reference
@@ -290,6 +329,52 @@ Binaries end up in `packages/opencode/dist/`. The build embeds the web UI
 `--version` smoke test on the host-platform binary. Requirements: `bun`, `zip`,
 `tar`, and `gh` (only for release upload).
 
+### Publishing a release to S3 (`vm-build-release.sh`) — our chosen flow
+
+For our internal releases we don't use GitHub Releases or npm. A single script at
+the repo root, [`vm-build-release.sh`](./vm-build-release.sh), builds the CLI and
+uploads it to the **`vm-opencode-releases`** S3 bucket (object versioning enabled).
+This is the day-to-day flow — one command, build to bucket.
+
+```bash
+# Build + publish version 1.18.3-vm to s3://vm-opencode-releases/1.18.3-vm/
+./vm-build-release.sh 1.18.3-vm
+
+./vm-build-release.sh 1.18.3-vm --latest       # also move the latest/ pointer
+./vm-build-release.sh 1.18.3-vm --force        # overwrite a published version (normally refused)
+./vm-build-release.sh 1.18.3-vm --skip-web-ui  # faster build; skips embedding the web console
+```
+
+What it does:
+
+1. Verifies `bun`/`aws`/`tar` + AWS credentials, and **refuses to overwrite an
+   already-published version** unless `--force` (releases are immutable).
+2. Runs `bun install` and the full cross-compile build with `OPENCODE_VERSION` set.
+3. Packages the two glibc-Linux targets the sandbox needs (`linux-x64`,
+   `linux-arm64`) as `.tar.gz`.
+4. Uploads them plus a `manifest.json` (version, git commit, per-artifact sha256).
+
+The resulting layout in the bucket:
+
+```
+s3://vm-opencode-releases/<version>/opencode-linux-x64.tar.gz
+s3://vm-opencode-releases/<version>/opencode-linux-arm64.tar.gz
+s3://vm-opencode-releases/<version>/manifest.json
+```
+
+Conventions (and why):
+
+- **Version lives in the S3 key path**, not S3's object-version IDs — those IDs are
+  opaque and can't be mapped to a release number. Object versioning is only a
+  backstop against accidental overwrite.
+- **Releases are immutable** — bump the version for every build; don't overwrite.
+- **`manifest.json` + sha256** let the sandbox Dockerfile verify what it pulled.
+- **Pin an explicit version in the Dockerfile** even if you keep a `latest/`
+  pointer — that's the whole point of the `v1.14.48` pin lesson.
+
+> Needs AWS credentials with write access to the bucket (`aws configure` / SSO / env
+> vars). Override the bucket with `VM_OPENCODE_BUCKET=...`.
+
 ---
 
 ## Deploying the fork into the vm-app sandbox
@@ -343,6 +428,29 @@ RUN case "$TARGETARCH" in \
 
 (Only build the `linux-x64` and `linux-arm64` glibc targets for the release — the
 `*-musl`, darwin, and windows targets are never used by this image.)
+
+**Option A2 — install from our S3 bucket (matches `vm-build-release.sh`).**
+Releases published by `vm-build-release.sh` (see above) live at
+`s3://vm-opencode-releases/<version>/opencode-<target>.tar.gz`. Pull the
+arch-appropriate glibc archive in the sandbox Dockerfile. This needs the `aws` CLI
+and credentials available at build time (build secret / instance role):
+
+```dockerfile
+ARG OPENCODE_VERSION=1.18.3-vm
+ARG TARGETARCH                       # provided by buildx: amd64 | arm64
+RUN case "$TARGETARCH" in \
+      amd64) OC_TARGET=linux-x64 ;; \
+      arm64) OC_TARGET=linux-arm64 ;; \
+      *) echo "unsupported arch: $TARGETARCH" && exit 1 ;; \
+    esac \
+ && aws s3 cp "s3://vm-opencode-releases/${OPENCODE_VERSION}/opencode-${OC_TARGET}.tar.gz" - \
+      | tar -xz -C /usr/local/bin \
+ && chmod 755 /usr/local/bin/opencode \
+ && which opencode && opencode --version
+```
+
+For a fully credential-free image build, pre-download the archive on the host
+(`aws s3 cp`) into the build context and use Option B's `COPY` instead.
 
 **Option B — COPY a locally-built binary (no release needed).**
 Build just the host target with `./packages/opencode/script/build.ts --single`,
