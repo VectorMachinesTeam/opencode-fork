@@ -673,6 +673,17 @@ function googleThinkingVariants(model: Provider.Model): Record<string, Record<st
 export function variants(model: Provider.Model): Record<string, Record<string, any>> {
   if (!model.capabilities.reasoning) return {}
 
+  // VectorMachines fork: never enable extended "thinking" for Claude models.
+  // The product's chat UI must not surface the model's chain-of-thought blob, so
+  // we drop all thinking-effort variants for native-Anthropic Claude. Other
+  // providers (and non-Claude Anthropic models like kimi) are unaffected.
+  if (
+    (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") &&
+    model.api.id.toLowerCase().includes("claude")
+  ) {
+    return {}
+  }
+
   const id = model.id.toLowerCase()
   const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2"].some(
     (name) => id.includes(name) || model.api.id.toLowerCase().includes(name),
