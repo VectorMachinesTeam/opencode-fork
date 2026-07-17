@@ -300,7 +300,11 @@ const layer = Layer.effect(
               sessionID: ctx.reasoningMap[value.id].sessionID,
               messageID: ctx.reasoningMap[value.id].messageID,
               partID: ctx.reasoningMap[value.id].id,
-              field: "text",
+              // VM fork: tag reasoning deltas as "reasoning" (not "text") so downstream
+              // consumers can distinguish Claude's thinking stream from answer text.
+              // The reasoning part's full text is still persisted via updatePart at
+              // reasoning-end (finishReasoning), so history/signatures are unaffected.
+              field: "reasoning",
               delta: value.text,
             })
             return
