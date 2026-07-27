@@ -25,7 +25,19 @@ import { BashArity } from "@/permission/arity"
 export { Parameters } from "./shell/prompt"
 
 const MAX_METADATA_LENGTH = 30_000
+// Sentinel returned by argPath() when an argument still contains an unresolvable
+// expansion after safe substitution (e.g. `$(...)`, backticks, an arbitrary `$VAR`).
+// Distinct from `undefined`, which means "no path here at all" (safe to ignore).
+const UNRESOLVED = Symbol("shell.unresolved")
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
+// FILES is intentionally a curated list of commands whose non-flag arguments are
+// reliably shell paths (pathArgs() below can extract them correctly). It excludes
+// general-purpose interpreters/VCS tools (python3, node, perl, ruby, git, bash -c,
+// etc.) whose arguments are program logic or tool-specific syntax, not shell path
+// syntax — statically knowing which path such a command will touch is unresolvable,
+// so those are left to the generic bash permission ask instead of external_directory.
+// Also excludes `dd`: its if=/of= are single key=value tokens that don't fit the
+// "non-flag token = path" model pathArgs() relies on without dd-specific parsing.
 const FILES = new Set([
   ...CWD,
   "rm",
@@ -36,6 +48,11 @@ const FILES = new Set([
   "chmod",
   "chown",
   "cat",
+  "tar",
+  "rsync",
+  "find",
+  "curl",
+  "sqlite3",
   // Leave PowerShell aliases out for now. Common ones like cat/cp/mv/rm/mkdir
   // already hit the entries above, and alias normalization should happen in one
   // place later so we do not risk double-prompting.
@@ -72,6 +89,7 @@ type Part = {
 
 type Scan = {
   dirs: Set<string>
+  unknown: Set<string>
   patterns: Set<string>
   always: Set<string>
 }
@@ -107,7 +125,13 @@ function parts(node: Node) {
       child.type !== "word" &&
       child.type !== "string" &&
       child.type !== "raw_string" &&
-      child.type !== "concatenation"
+      child.type !== "concatenation" &&
+      // A bare `$(...)`/`` `...` ``/`$((...))` used as a whole argument (not
+      // wrapped in a string/concatenation) parses as its own node here rather
+      // than inside command_elements. Include it so it still reaches argPath()
+      // and gets classified by dynamic() instead of silently vanishing.
+      child.type !== "command_substitution" &&
+      child.type !== "arithmetic_expansion"
     ) {
       continue
     }
@@ -155,6 +179,7 @@ function expand(text: string, cwd: string, shell: string) {
   const out = unquote(text)
     .replace(/\$\{env:([^}]+)\}/gi, (_, key: string) => envValue(key) || "")
     .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (_, key: string) => envValue(key) || "")
+    .replace(/\$\{(HOME|PWD|PSHOME)\}/gi, (_, key: string) => auto(key, cwd, shell) || "")
     .replace(/\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi, (_, key: string) => auto(key, cwd, shell) || "")
   return home(out)
 }
@@ -261,20 +286,25 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
 })
 
 const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan, input: { command: string }) {
-  if (scan.dirs.size > 0) {
+  if (scan.dirs.size > 0 || scan.unknown.size > 0) {
     const directories = Array.from(scan.dirs)
     const globs = directories.map((dir) => {
       if (process.platform === "win32") return FSUtil.normalizePathPattern(path.join(dir, "*"))
       return path.join(dir, "*")
     })
+    // Unresolved commands use their literal raw text as the pattern, not a
+    // wildcard glob — otherwise a single "always allow" reply would silently
+    // generalize to every future external_directory request.
+    const unresolved = Array.from(scan.unknown)
     yield* ctx.ask({
       permission: "external_directory",
-      patterns: globs,
-      always: globs,
+      patterns: [...globs, ...unresolved],
+      always: [...globs, ...unresolved],
       metadata: {
         command: input.command,
         directories,
         patterns: globs,
+        ...(unresolved.length > 0 ? { unresolved } : {}),
       },
     })
   }
@@ -367,9 +397,10 @@ export const ShellTool = Tool.define(
     })
 
     const argPath = Effect.fn("ShellTool.argPath")(function* (arg: string, cwd: string, ps: boolean, shell: string) {
-      const text = ps ? expand(arg, cwd, shell) : home(unquote(arg))
+      const text = expand(arg, cwd, shell)
+      if (dynamic(text, ps)) return UNRESOLVED
       const file = text && prefix(text)
-      if (!file || dynamic(file, ps)) return
+      if (!file) return
       const next = ps ? provider(file) : file
       if (!next) return
       return yield* resolvePath(next, cwd, shell)
@@ -384,6 +415,7 @@ export const ShellTool = Tool.define(
     ) {
       const scan: Scan = {
         dirs: new Set<string>(),
+        unknown: new Set<string>(),
         patterns: new Set<string>(),
         always: new Set<string>(),
       }
@@ -397,7 +429,11 @@ export const ShellTool = Tool.define(
         if (cmd && (FILES.has(cmd) || (shellKind === "cmd" && CMD_FILES.has(cmd)))) {
           for (const arg of pathArgs(command, ps, shellKind === "cmd")) {
             const resolved = yield* argPath(arg, cwd, ps, shell)
-            yield* Effect.logInfo("resolved path", { arg, resolved })
+            yield* Effect.logInfo("resolved path", { arg, resolved: String(resolved) })
+            if (resolved === UNRESOLVED) {
+              scan.unknown.add(source(node))
+              continue
+            }
             if (!resolved || containsPath(resolved, instance)) continue
             const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
             scan.dirs.add(dir)
