@@ -66,4 +66,11 @@ export const invalidate = <A, E, R>(self: InstanceState<A, E, R>) =>
     return yield* ScopedCache.invalidate(self.cache, yield* directory)
   })
 
+/**
+ * Invalidate every directory's entry, not just the current one. Used when a
+ * process-global input changes (e.g. skills rewritten on disk) so all warm
+ * instances re-run the lookup on next access without an instance restart.
+ */
+export const invalidateAll = <A, E, R>(self: InstanceState<A, E, R>) => ScopedCache.invalidateAll(self.cache)
+
 export * as InstanceState from "./instance-state"
