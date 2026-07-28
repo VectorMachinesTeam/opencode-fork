@@ -343,6 +343,19 @@ test("parseModel handles model IDs with slashes", () => {
   expect(String(result.modelID)).toBe("anthropic/claude-3-opus")
 })
 
+test("InitError message distinguishes an npm-install failure from a generic init failure", () => {
+  const generic = new Provider.InitError({ providerID: "anthropic" as any })
+  expect(generic.message).toBe("Failed to initialize provider: anthropic")
+
+  const npmInstallFailure = new Provider.InitError({
+    providerID: "acme" as any,
+    reason: 'could not install provider package "acme-ai-sdk-provider" — this environment may lack npm registry access; pre-bundle the package or check network/registry configuration',
+  })
+  expect(npmInstallFailure.message).toBe(
+    'Failed to initialize provider "acme": could not install provider package "acme-ai-sdk-provider" — this environment may lack npm registry access; pre-bundle the package or check network/registry configuration',
+  )
+})
+
 it.instance("defaultModel returns first available model when no config set", () =>
   Effect.gen(function* () {
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")

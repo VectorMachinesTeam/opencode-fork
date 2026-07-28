@@ -1110,8 +1110,10 @@ export class ModelNotFoundError extends Schema.TaggedErrorClass<ModelNotFoundErr
 export class InitError extends Schema.TaggedErrorClass<InitError>()("ProviderInitError", {
   providerID: ProviderV2.ID,
   cause: Schema.optional(Schema.Defect()),
+  reason: Schema.optional(Schema.String),
 }) {
   override get message() {
+    if (this.reason) return `Failed to initialize provider "${this.providerID}": ${this.reason}`
     return `Failed to initialize provider: ${this.providerID}`
   }
 
@@ -1795,7 +1797,11 @@ const layer = Layer.effect(
         s.sdk.set(key, loaded)
         return loaded as SDK
       } catch (e) {
-        throw new InitError({ providerID: model.providerID, cause: e })
+        const reason =
+          e instanceof Npm.InstallFailedError
+            ? `could not install provider package "${e.add?.join(", ") ?? model.api.npm}" — this environment may lack npm registry access; pre-bundle the package or check network/registry configuration`
+            : undefined
+        throw new InitError({ providerID: model.providerID, cause: e, reason })
       }
     }
 

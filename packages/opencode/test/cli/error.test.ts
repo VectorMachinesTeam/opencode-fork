@@ -89,6 +89,17 @@ describe("cli.error", () => {
     expect(FormatError({ _tag: "ProviderInitError", ...data })).toBe(expected)
   })
 
+  test("formats provider init errors with a reason distinctly from credential failures", () => {
+    const data = {
+      providerID: "acme",
+      reason: 'could not install provider package "acme-ai-sdk-provider" — this environment may lack npm registry access; pre-bundle the package or check network/registry configuration',
+    }
+    const expected = `Failed to initialize provider "acme": ${data.reason}`
+
+    expect(FormatError({ name: "ProviderInitError", data })).toBe(expected)
+    expect(FormatError({ _tag: "ProviderInitError", ...data })).toBe(expected)
+  })
+
   test("formats cancelled UI errors as empty output", () => {
     expect(FormatError(new UI.CancelledError())).toBe("")
   })

@@ -69,9 +69,11 @@ export function FormatError(input: unknown): string | undefined {
     ].join("\n")
   }
 
-  // ProviderInitError: { providerID: string }
+  // ProviderInitError: { providerID: string, reason?: string }
   const providerInit = configData(input, "ProviderInitError")
   if (providerInit) {
+    const reason = stringField(providerInit, "reason")
+    if (reason) return `Failed to initialize provider "${stringField(providerInit, "providerID")}": ${reason}`
     return `Failed to initialize provider "${stringField(providerInit, "providerID")}". Check credentials and configuration.`
   }
 
