@@ -3,6 +3,7 @@ import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Installation } from "@/installation"
+import { Skill } from "@/skill"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Queue, Schema } from "effect"
@@ -69,6 +70,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
   Effect.gen(function* () {
     const config = yield* Config.Service
     const installation = yield* Installation.Service
+    const skill = yield* Skill.Service
     const bridge = yield* EffectBridge.make()
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
@@ -91,6 +93,12 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {
       yield* disposeAllInstancesAndEmitGlobalDisposed()
+      return true
+    })
+
+    const skillReload = Effect.fn("GlobalHttpApi.skillReload")(function* () {
+      yield* skill.reload()
+      yield* Effect.logInfo("skill caches invalidated")
       return true
     })
 
@@ -151,6 +159,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)
       .handle("dispose", dispose)
+      .handle("skillReload", skillReload)
       .handleRaw("upgrade", upgradeRaw)
   }),
 )

@@ -100,6 +100,7 @@ export interface Interface {
   readonly all: () => Effect.Effect<Info[]>
   readonly dirs: () => Effect.Effect<string[]>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
+  readonly reload: () => Effect.Effect<void>
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
@@ -314,7 +315,18 @@ const layer = Layer.effect(
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    // Drop the cached disk scan (discovered) and parsed skills (state) for EVERY
+    // directory, so all warm instances re-discover from disk on their next skill
+    // access. Both caches must be cleared: `state` is built from `discovered`, so
+    // flushing only `state` would rebuild it from a stale scan. Skills changed on
+    // disk (e.g. the backend rewriting the global skills dir) then become visible
+    // without an instance/process restart.
+    const reload = Effect.fn("Skill.reload")(function* () {
+      yield* InstanceState.invalidateAll(discovered)
+      yield* InstanceState.invalidateAll(state)
+    })
+
+    return Service.of({ get, require, all, dirs, available, reload })
   }),
 )
 
