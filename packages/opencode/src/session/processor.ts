@@ -300,7 +300,11 @@ const layer = Layer.effect(
               sessionID: ctx.reasoningMap[value.id].sessionID,
               messageID: ctx.reasoningMap[value.id].messageID,
               partID: ctx.reasoningMap[value.id].id,
-              field: "text",
+              // VM fork: tag reasoning deltas as "reasoning" (not "text") so downstream
+              // consumers can distinguish Claude's thinking stream from answer text.
+              // The reasoning part's full text is still persisted via updatePart at
+              // reasoning-end (finishReasoning), so history/signatures are unaffected.
+              field: "reasoning",
               delta: value.text,
             })
             return
@@ -319,9 +323,24 @@ const layer = Layer.effect(
             yield* ensureToolCall(value)
             return
 
-          case "tool-input-delta":
-            yield* ensureToolCall(value)
+          case "tool-input-delta": {
+            const { part } = yield* ensureToolCall(value)
+            // Stream the tool's argument generation live. The model emits the tool
+            // input (e.g. a chart spec) token by token as partial JSON; publish each
+            // chunk as a part delta on the "input" field so consumers can render the
+            // tool call being built in real time, instead of only seeing the finished
+            // input at tool-call. Mirrors how text/reasoning deltas stream.
+            const delta = value.text ?? ""
+            if (delta.length > 0)
+              yield* session.updatePartDelta({
+                sessionID: part.sessionID,
+                messageID: part.messageID,
+                partID: part.id,
+                field: "input",
+                delta,
+              })
             return
+          }
 
           case "tool-input-end": {
             yield* ensureToolCall(value)
