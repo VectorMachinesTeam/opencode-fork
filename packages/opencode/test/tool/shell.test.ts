@@ -929,6 +929,140 @@ describe("tool.shell permissions", () => {
     }),
   )
 
+  each("asks for external_directory permission for unresolvable dynamic arguments", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          const command = "cat $(echo /etc/hostname)"
+          yield* run(
+            {
+              command,
+            },
+            capture(requests),
+          )
+          const extDirReq = requests.find((r) => r.permission === "external_directory")
+          const bashReq = requests.find((r) => r.permission === "bash")
+          expect(extDirReq).toBeDefined()
+          expect(extDirReq!.patterns).toContain(command)
+          expect(extDirReq!.metadata).toMatchObject({ unresolved: [command] })
+          expect(bashReq).toBeDefined()
+        }),
+      )
+    }),
+  )
+
+  each("does not ask for external_directory permission for $PWD inside project", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          yield* run(
+            {
+              command: "cat $PWD/in.txt",
+            },
+            capture(requests),
+          )
+          const extDirReq = requests.find((r) => r.permission === "external_directory")
+          expect(extDirReq).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  each("asks for external_directory permission for $HOME with a precise directory glob", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const err = new Error("stop after permission")
+        const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+        expect(
+          yield* fail(
+            {
+              command: "cat $HOME/somefile",
+            },
+            capture(requests, err),
+          ),
+        ).toMatchObject({ message: err.message })
+        const extDirReq = requests.find((r) => r.permission === "external_directory")
+        expect(extDirReq).toBeDefined()
+        expect(extDirReq!.patterns).toContain(glob(path.join(os.homedir(), "*")))
+        expect(extDirReq!.metadata).not.toHaveProperty("unresolved")
+      }),
+    ),
+  )
+
+  each("does not ask for external_directory permission for tar inside project", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          yield* run(
+            {
+              command: `tar -cf ${path.join(tmp, "archive.tar")} .`,
+            },
+            capture(requests),
+          )
+          const extDirReq = requests.find((r) => r.permission === "external_directory")
+          expect(extDirReq).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  each("asks for external_directory permission for tar outside project", () =>
+    Effect.gen(function* () {
+      const outerTmp = yield* tmpdirScoped()
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const err = new Error("stop after permission")
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          const archive = path.join(outerTmp, "archive.tar")
+          expect(
+            yield* fail(
+              {
+                command: `tar -cf ${archive} .`,
+              },
+              capture(requests, err),
+            ),
+          ).toMatchObject({ message: err.message })
+          const extDirReq = requests.find((r) => r.permission === "external_directory")
+          const expected = glob(path.join(outerTmp, "*"))
+          expect(extDirReq).toBeDefined()
+          expect(extDirReq!.patterns).toContain(expected)
+        }),
+      )
+    }),
+  )
+
+  each("does not ask for external_directory permission for unenumerated interpreters", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+        const file = process.platform === "win32" ? `${process.env.WINDIR!.replaceAll("\\", "/")}/system.ini` : "/etc/hosts"
+        yield* run(
+          {
+            command: `${bin} ${file}`,
+          },
+          capture(requests),
+        )
+        const extDirReq = requests.find((r) => r.permission === "external_directory")
+        const bashReq = requests.find((r) => r.permission === "bash")
+        expect(extDirReq).toBeUndefined()
+        expect(bashReq).toBeDefined()
+      }),
+    ),
+  )
+
   each("includes always patterns for auto-approval", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

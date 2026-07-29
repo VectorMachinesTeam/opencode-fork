@@ -115,6 +115,17 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected
+    .post("/global/skill/reload", "global.skill.reload")
+    .global()
+    .mutating()
+    .json(
+      200,
+      (body) => {
+        check(body === true, "global skill reload should return true")
+      },
+      "status",
+    ),
   http.protected.get("/path", "path.get").json(200, (body, ctx) => {
     object(body)
     check(body.directory === ctx.directory, "directory should resolve from x-opencode-directory")

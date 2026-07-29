@@ -19,6 +19,9 @@
 #   --force         Overwrite an already-published version (default: refuse)
 #   --skip-web-ui   Faster/smaller build; skips embedding opencode's web console
 #                   (the vm-app sandbox uses the HTTP API, not the web console)
+#   --notes "..."   1-2 sentence dev note describing what changed, saved in the
+#                   manifest. Omit to be prompted (interactive) or default to the
+#                   latest git commit subject.
 #
 # Env overrides:
 #   VM_OPENCODE_BUCKET   S3 bucket name (default: vm-opencode-releases)
@@ -47,7 +50,8 @@ DIST_DIR="$REPO_ROOT/packages/opencode/dist"
 VERSION=""
 MARK_LATEST=0
 FORCE=0
-SKIB_UI=0
+SKIP_WEB_UI=0
+NOTES=""
 
 usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -56,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --latest)      MARK_LATEST=1 ;;
     --force)       FORCE=1 ;;
     --skip-web-ui) SKIP_WEB_UI=1 ;;
+    --notes)       NOTES="${2:-}"; shift ;;
     -h|--help)     usage 0 ;;
     -*)            echo "Unknown option: $1" >&2; usage 1 ;;
     *)
@@ -98,7 +103,7 @@ if s3_key_exists "$VERSION/manifest.json"; then
   if [[ $FORCE -eq 0 ]]; then
     die "version '$VERSION' already published at s3://$BUCKET/$VERSION/ — bump the version, or pass --force to overwrite."
   fi
-  warn "version '$VERSION' already exists — overwriting because --force was given (old objects stecoverable via S3 versioning)."
+  warn "version '$VERSION' already exists — overwriting because --force was given (old objects stay recoverable via S3 versioning)."
 fi
 
 # Record provenance. A dirty tree means the build isn't reproducible from a commit.
@@ -109,6 +114,24 @@ if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
 else
   GIT_DIRTY=false
 fi
+
+# Developer notes: a 1-2 sentence human summary of what changed in this release,
+# stored in the manifest so `aws s3 cp .../manifest.json -` explains why it exists.
+# Priority: --notes flag > interactive prompt (if a TTY) > latest commit subject.
+if [[ -z "$NOTES" ]]; then
+  if [[ -t 0 ]]; then
+    printf '\033[1;36m?\033[0m One-line dev note for %s (what changed? blank = last commit subject): ' "$VERSION" >&2
+    IFS= read -r NOTES || true
+  fi
+  if [[ -z "$NOTES" ]]; then
+    NOTES="$(git -C "$REPO_ROOT" log -1 --pretty=%s 2>/dev/null || echo '')"
+    [[ -n "$NOTES" ]] && warn "no note given; defaulting to latest commit subject: \"$NOTES\""
+  fi
+fi
+# JSON-escape (backslash, double-quote) and collapse newlines so the manifest stays valid.
+NOTES_ESCAPED="${NOTES//\\/\\\\}"
+NOTES_ESCAPED="${NOTES_ESCAPED//\"/\\\"}"
+NOTES_ESCAPED="${NOTES_ESCAPED//$'\n'/ }"
 
 # ---------------------------------------------------------------------------
 # Build (full cross-compile — produces all targets; we upload the Linux ones)
@@ -124,7 +147,7 @@ BUILD_ARGS=()
 log "Building opencode $VERSION (cross-compiling all targets)..."
 OPENCODE_VERSION="$VERSION" bun run "$BUILD_SCRIPT" "${BUILD_ARGS[@]}"
 
-# -----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Package + upload the Linux targets
 # ---------------------------------------------------------------------------
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -148,15 +171,15 @@ for target in "${TARGETS[@]}"; do
     --metadata "version=$VERSION,git-commit=$GIT_COMMIT,sha256=$sha"
 
   entry="$(printf '{"target":"%s","key":"%s","sha256":"%s","bytes":%s}' "$target" "$key" "$sha" "$bytes")"
-  artifacts_json="${artifacts_json:+$artifacts_json,}$eny"
+  artifacts_json="${artifacts_json:+$artifacts_json,}$entry"
 done
 
 # ---------------------------------------------------------------------------
 # Manifest — the source of truth for "what is version X"
 # ---------------------------------------------------------------------------
 manifest_file="$DIST_DIR/manifest-$VERSION.json"
-printf '{\n  "version": "%s",\n  "git_commit": "%s",\n  "git_dirty": %s,\n  "built_at": "%s",\n  "bucket": "%s",\n  "artifacts": [%s]\n}\n' \
-  "$VERSION" "$GIT_COMMIT" "$GIT_DIRTY" "$BUILT_AT" "$BUCKET" "$artifacts_json" > "$manifest_file"
+printf '{\n  "version": "%s",\n  "git_commit": "%s",\n  "git_dirty": %s,\n  "dev_notes": "%s",\n  "built_at": "%s",\n  "bucket": "%s",\n  "artifacts": [%s]\n}\n' \
+  "$VERSION" "$GIT_COMMIT" "$GIT_DIRTY" "$NOTES_ESCAPED" "$BUILT_AT" "$BUCKET" "$artifacts_json" > "$manifest_file"
 
 log "Uploading manifest -> s3://$BUCKET/$VERSION/manifest.json"
 aws s3 cp "$manifest_file" "s3://$BUCKET/$VERSION/manifest.json" --content-type application/json
@@ -167,7 +190,7 @@ aws s3 cp "$manifest_file" "s3://$BUCKET/$VERSION/manifest.json" --content-type 
 if [[ $MARK_LATEST -eq 1 ]]; then
   log "Updating latest/ pointer..."
   for target in "${TARGETS[@]}"; do
-    aws s3 c"s3://$BUCKET/$VERSION/opencode-$target.tar.gz" \
+    aws s3 cp "s3://$BUCKET/$VERSION/opencode-$target.tar.gz" \
               "s3://$BUCKET/latest/opencode-$target.tar.gz" --content-type application/gzip
   done
   aws s3 cp "s3://$BUCKET/$VERSION/manifest.json" \

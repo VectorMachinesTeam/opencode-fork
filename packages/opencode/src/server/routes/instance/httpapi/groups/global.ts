@@ -68,6 +68,7 @@ export const GlobalPaths = {
   config: "/global/config",
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
+  skillReload: "/global/skill/reload",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -129,6 +130,16 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.upgrade",
           summary: "Upgrade opencode",
           description: "Upgrade opencode to the specified version or latest if not specified.",
+        }),
+      ),
+      HttpApiEndpoint.post("skillReload", GlobalPaths.skillReload, {
+        success: described(Schema.Boolean, "Skill caches invalidated"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.skill.reload",
+          summary: "Reload skills",
+          description:
+            "Invalidate the cached skill discovery for all sessions so each re-scans skills from disk on next use, picking up added/edited/removed skills without an instance restart.",
         }),
       ),
     )

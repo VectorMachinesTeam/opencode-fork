@@ -151,6 +151,48 @@ description: Skill for dirs test.
     ),
   )
 
+  it.live("reload() lets an already-warm session pick up on-disk skill changes without a restart", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const writeSkill = (slug: string, description: string) =>
+            Effect.promise(() =>
+              Bun.write(
+                path.join(dir, ".opencode", "skill", slug, "SKILL.md"),
+                `---
+name: ${slug}
+description: ${description}
+---
+
+# ${slug}
+`,
+              ),
+            )
+
+          // One skill on disk, then warm this directory's per-session cache.
+          yield* writeSkill("skill-before", "Present before the session warmed up.")
+          const skill = yield* Skill.Service
+          const initial = (yield* skill.all()).filter((s) => s.location !== "<built-in>")
+          expect(initial.map((s) => s.name)).toEqual(["skill-before"])
+
+          // A new skill lands on disk while the session is already warm.
+          yield* writeSkill("skill-after", "Added to disk after the session warmed up.")
+
+          // Without reload the warm cache is stale — this is the bug we are fixing:
+          // the new skill is invisible until the instance/process restarts.
+          const stale = (yield* skill.all()).filter((s) => s.location !== "<built-in>")
+          expect(stale.map((s) => s.name)).toEqual(["skill-before"])
+
+          // reload() drops the cached scan for every directory; the next access
+          // re-scans disk and now sees the change — no restart required.
+          yield* skill.reload()
+          const fresh = (yield* skill.all()).filter((s) => s.location !== "<built-in>")
+          expect(fresh.map((s) => s.name).toSorted()).toEqual(["skill-after", "skill-before"])
+        }),
+      { git: true },
+    ),
+  )
+
   it.live("discovers multiple skills from .opencode/skill/ directory", () =>
     provideTmpdirInstance(
       (dir) =>
