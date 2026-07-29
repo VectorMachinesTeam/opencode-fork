@@ -47,7 +47,7 @@ DIST_DIR="$REPO_ROOT/packages/opencode/dist"
 VERSION=""
 MARK_LATEST=0
 FORCE=0
-SKIB_UI=0
+SKIP_WEB_UI=0
 
 usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -148,7 +148,7 @@ for target in "${TARGETS[@]}"; do
     --metadata "version=$VERSION,git-commit=$GIT_COMMIT,sha256=$sha"
 
   entry="$(printf '{"target":"%s","key":"%s","sha256":"%s","bytes":%s}' "$target" "$key" "$sha" "$bytes")"
-  artifacts_json="${artifacts_json:+$artifacts_json,}$eny"
+  artifacts_json="${artifacts_json:+$artifacts_json,}$entry"
 done
 
 # ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ aws s3 cp "$manifest_file" "s3://$BUCKET/$VERSION/manifest.json" --content-type 
 if [[ $MARK_LATEST -eq 1 ]]; then
   log "Updating latest/ pointer..."
   for target in "${TARGETS[@]}"; do
-    aws s3 c"s3://$BUCKET/$VERSION/opencode-$target.tar.gz" \
+    aws s3 cp "s3://$BUCKET/$VERSION/opencode-$target.tar.gz" \
               "s3://$BUCKET/latest/opencode-$target.tar.gz" --content-type application/gzip
   done
   aws s3 cp "s3://$BUCKET/$VERSION/manifest.json" \
