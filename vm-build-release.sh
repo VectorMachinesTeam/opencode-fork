@@ -98,7 +98,7 @@ if s3_key_exists "$VERSION/manifest.json"; then
   if [[ $FORCE -eq 0 ]]; then
     die "version '$VERSION' already published at s3://$BUCKET/$VERSION/ — bump the version, or pass --force to overwrite."
   fi
-  warn "version '$VERSION' already exists — overwriting because --force was given (old objects stecoverable via S3 versioning)."
+  warn "version '$VERSION' already exists — overwriting because --force was given (old objects stay recoverable via S3 versioning)."
 fi
 
 # Record provenance. A dirty tree means the build isn't reproducible from a commit.
@@ -124,7 +124,7 @@ BUILD_ARGS=()
 log "Building opencode $VERSION (cross-compiling all targets)..."
 OPENCODE_VERSION="$VERSION" bun run "$BUILD_SCRIPT" "${BUILD_ARGS[@]}"
 
-# -----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Package + upload the Linux targets
 # ---------------------------------------------------------------------------
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
