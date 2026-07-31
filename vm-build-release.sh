@@ -145,7 +145,9 @@ BUILD_ARGS=()
 [[ $SKIP_WEB_UI -eq 1 ]] && BUILD_ARGS+=(--skip-embed-web-ui)
 
 log "Building opencode $VERSION (cross-compiling all targets)..."
-OPENCODE_VERSION="$VERSION" bun run "$BUILD_SCRIPT" "${BUILD_ARGS[@]}"
+# ${arr[@]+...} guard: on bash 3.2 (macOS) `set -u` treats an empty array
+# expansion as an unbound variable, which it isn't.
+OPENCODE_VERSION="$VERSION" bun run "$BUILD_SCRIPT" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 
 # ---------------------------------------------------------------------------
 # Package + upload the Linux targets

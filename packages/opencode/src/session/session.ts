@@ -273,6 +273,17 @@ export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInpu
 export const ForkInput = Schema.Struct({
   sessionID: SessionID,
   messageID: Schema.optional(MessageID),
+  // Where the forked session runs. Without this a fork is stuck in the source
+  // session's directory for life: the fork request routes by the SOURCE
+  // session id, so `planRequest` resolves `session.directory` ahead of any
+  // ?directory=, and a session's directory is fixed at create. Callers that
+  // want an isolated fork — its own files, not a second writer on the
+  // original's — have no other way to ask for one.
+  //
+  // No more privileged than what already exists: `defaultDirectory` takes an
+  // unvalidated ?directory= query param or x-opencode-directory header, so
+  // this adds a field, not a capability.
+  directory: Schema.optional(Schema.String),
 })
 export const GetInput = SessionID
 export const ChildrenInput = SessionID
@@ -424,7 +435,11 @@ export interface Interface {
     permission?: PermissionV1.Ruleset
     workspaceID?: WorkspaceV2.ID
   }) => Effect.Effect<Info>
-  readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
+  readonly fork: (input: {
+    sessionID: SessionID
+    messageID?: MessageID
+    directory?: string
+  }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
@@ -690,13 +705,20 @@ const layer: Layer.Layer<
       })
     })
 
-    const fork = Effect.fn("Session.fork")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
+    const fork = Effect.fn("Session.fork")(function* (input: {
+      sessionID: SessionID
+      messageID?: MessageID
+      directory?: string
+    }) {
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
+      // Defaults to the source's directory, so an unforked caller keeps the
+      // previous behaviour of a fork sharing the original's working files.
+      const directory = input.directory ?? ctx.directory
       const session = yield* createNext({
-        directory: ctx.directory,
-        path: sessionPath(ctx.worktree, ctx.directory),
+        directory,
+        path: sessionPath(ctx.worktree, directory),
         workspaceID: original.workspaceID,
         title,
         metadata: structuredClone(original.metadata),

@@ -172,6 +172,9 @@ describe("Session input schemas", () => {
     // messageID is optional
     const bare = { sessionID }
     expect(decode(bare)).toEqual(bare)
+    // directory re-roots the fork; without it a fork shares the source's files
+    const rerooted = { sessionID, messageID, directory: "/sandbox/sessions/abc" }
+    expect(decode(rerooted)).toEqual(rerooted)
   })
 
   test("SetTitleInput rejects missing title", () => {

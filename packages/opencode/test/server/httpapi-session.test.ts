@@ -775,6 +775,26 @@ describe("session HttpApi", () => {
         )
         expect(forkedWhitespace.id).not.toBe(created.id)
 
+        // A fork routes by the SOURCE session id, so planRequest resolves the
+        // source's directory and ?directory= is ignored. Without an explicit
+        // directory on the payload, a fork can never be given working files of
+        // its own — it is a second writer on the original's.
+        expect(forked.directory).toBe(created.directory)
+
+        const forkDirectory = path.join(test.directory, "forked-elsewhere")
+        yield* Effect.promise(() => mkdir(forkDirectory, { recursive: true }))
+        const forkedElsewhere = yield* requestJson<Session.Info>(
+          pathFor(SessionPaths.fork, { sessionID: created.id }),
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ directory: forkDirectory }),
+          },
+        )
+        expect(forkedElsewhere.id).not.toBe(created.id)
+        expect(forkedElsewhere.directory).toBe(forkDirectory)
+        expect(forkedElsewhere.directory).not.toBe(created.directory)
+
         expect(
           yield* requestJson<boolean>(pathFor(SessionPaths.abort, { sessionID: created.id }), {
             method: "POST",
